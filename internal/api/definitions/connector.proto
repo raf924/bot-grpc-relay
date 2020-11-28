@@ -1,0 +1,18 @@
+syntax = "proto3";
+option go_package = "github.com/raf924/bot-grpc-relay/api";
+package connector;
+
+import "github.com/raf924/bot/api/definitions/packets.proto";
+import "google/protobuf/empty.proto";
+
+message String {
+  string string = 1;
+}
+
+service Connector {
+  rpc Register(packets.RegistrationPacket) returns(packets.ConfirmationPacket) {}
+  rpc ReadMessages(google.protobuf.Empty) returns(stream packets.MessagePacket) {}
+  rpc ReadCommands(google.protobuf.Empty) returns(stream packets.CommandPacket) {}
+  rpc ReadUserEvents(google.protobuf.Empty) returns(stream packets.UserPacket) {}
+  rpc SendMessage(packets.BotPacket) returns(google.protobuf.Empty) {}
+}
