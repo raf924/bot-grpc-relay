@@ -95,13 +95,14 @@ func (c *grpcBotRelay) Commands() []*messages.Command {
 	return c.registration.Commands
 }
 
-func (c *grpcBotRelay) Start(botUser *messages.User) error {
+func (c *grpcBotRelay) Start(botUser *messages.User, users []*messages.User) error {
 	c.readyChannel = make(chan struct{})
 	c.botChannel = make(chan *messages.BotPacket)
 	c.messageQueue = make(chan protoreflect.ProtoMessage)
 	c.commandQueue = make(chan protoreflect.ProtoMessage)
 	c.eventsQueue = make(chan protoreflect.ProtoMessage)
 	c.botUser = botUser
+	c.users = users
 	log.Println("Listening on ", c.config.Port)
 	l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", c.config.Port))
 	if err != nil {
@@ -183,10 +184,10 @@ func (c *grpcBotRelay) PassEvent(event *messages.UserPacket) error {
 	c.eventsQueue <- event
 	switch event.Event {
 	case messages.UserEvent_JOINED:
-		c.users = append(c.users, event.User)
+		c.users = append(c.users, event.GetUser())
 	case messages.UserEvent_LEFT:
 		for i, user := range c.users {
-			if user.Nick == event.User.Nick {
+			if user.GetNick() == event.GetUser().GetNick() {
 				c.users = append(c.users[:i], c.users[i+1:]...)
 				break
 			}

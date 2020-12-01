@@ -33,18 +33,6 @@ func newConnectorRelay(config interface{}) relay.ConnectorRelay {
 	return &grpcConnectorRelay{config: conf}
 }
 
-func readStream(stream grpc.ClientStream, f func(message protoreflect.ProtoMessage) error) error {
-	var err error
-	var packet protoreflect.ProtoMessage
-	for ; err == nil; err = stream.RecvMsg(packet) {
-		err := f(packet)
-		if err != nil {
-			log.Println(err)
-		}
-	}
-	return err
-}
-
 func readEventStream(stream grpc.ClientStream, f func(event *messages.UserPacket) error) error {
 	var err error
 	var packet messages.UserPacket
@@ -97,11 +85,22 @@ func (g *grpcConnectorRelay) GetUsers() []*messages.User {
 }
 
 func (g *grpcConnectorRelay) OnUserJoin(f func(user *messages.User, timestamp int64)) {
-	g.onUserJoin = f
+	g.onUserJoin = func(user *messages.User, timestamp int64) {
+		g.users = append(g.users, user)
+		f(user, timestamp)
+	}
 }
 
 func (g *grpcConnectorRelay) OnUserLeft(f func(user *messages.User, timestamp int64)) {
-	g.onUserLeft = f
+	g.onUserLeft = func(user *messages.User, timestamp int64) {
+		for i, u := range g.users {
+			if u.GetNick() == user.GetNick() {
+				g.users = append(g.users[:i], g.users[i+1:]...)
+				break
+			}
+		}
+		f(user, timestamp)
+	}
 }
 
 func (g *grpcConnectorRelay) Connect(registration *messages.RegistrationPacket) (*messages.User, error) {
