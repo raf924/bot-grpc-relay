@@ -78,6 +78,12 @@ type grpcConnectorRelay struct {
 	messageStream   grpc.ClientStream
 	commandStream   grpc.ClientStream
 	incomingChannel chan protoreflect.ProtoMessage
+	ctx             context.Context
+	cancel          context.CancelFunc
+}
+
+func (g *grpcConnectorRelay) Done() <-chan struct{} {
+	return g.ctx.Done()
 }
 
 func (g *grpcConnectorRelay) GetUsers() []*messages.User {
@@ -104,6 +110,7 @@ func (g *grpcConnectorRelay) OnUserLeft(f func(user *messages.User, timestamp in
 }
 
 func (g *grpcConnectorRelay) Connect(registration *messages.RegistrationPacket) (*messages.User, error) {
+	g.ctx, g.cancel = context.WithCancel(context.Background())
 	var clientOption = grpc.WithInsecure()
 	var err error
 	if g.config.Tls.Enabled {
@@ -153,7 +160,8 @@ func (g *grpcConnectorRelay) Connect(registration *messages.RegistrationPacket) 
 			return nil
 		})
 		if !errors.Is(err, io.EOF) {
-			panic(err)
+			g.cancel()
+			return
 		}
 	}()
 	g.messageStream, err = g.connector.ReadMessages(context.Background(), &emptypb.Empty{})
@@ -170,10 +178,8 @@ func (g *grpcConnectorRelay) Connect(registration *messages.RegistrationPacket) 
 			return nil
 		})
 		if !errors.Is(err, io.EOF) {
-			if !errors.Is(err, grpc.ErrServerStopped) {
-
-			}
-			panic(err)
+			g.cancel()
+			return
 		}
 	}()
 	g.commandStream, err = g.connector.ReadCommands(context.Background(), &emptypb.Empty{})
@@ -190,7 +196,8 @@ func (g *grpcConnectorRelay) Connect(registration *messages.RegistrationPacket) 
 			return nil
 		})
 		if !errors.Is(err, io.EOF) {
-			panic(err)
+			g.cancel()
+			return
 		}
 	}()
 	return confirmation.BotUser, nil
