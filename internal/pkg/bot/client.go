@@ -92,6 +92,9 @@ func (g *grpcConnectorRelay) GetUsers() []*messages.User {
 
 func (g *grpcConnectorRelay) OnUserJoin(f func(user *messages.User, timestamp int64)) {
 	g.onUserJoin = func(user *messages.User, timestamp int64) {
+		if user == nil {
+			return
+		}
 		g.users = append(g.users, user)
 		f(user, timestamp)
 	}
@@ -110,6 +113,8 @@ func (g *grpcConnectorRelay) OnUserLeft(f func(user *messages.User, timestamp in
 }
 
 func (g *grpcConnectorRelay) Connect(registration *messages.RegistrationPacket) (*messages.User, error) {
+	g.OnUserJoin(func(user *messages.User, timestamp int64) {})
+	g.OnUserLeft(func(user *messages.User, timestamp int64) {})
 	g.ctx, g.cancel = context.WithCancel(context.Background())
 	var clientOption = grpc.WithInsecure()
 	var err error
@@ -155,7 +160,7 @@ func (g *grpcConnectorRelay) Connect(registration *messages.RegistrationPacket) 
 				if g.onUserLeft == nil {
 					return nil
 				}
-				g.onUserJoin(event.User, event.Timestamp.GetSeconds())
+				g.onUserLeft(event.User, event.Timestamp.GetSeconds())
 			}
 			return nil
 		})
