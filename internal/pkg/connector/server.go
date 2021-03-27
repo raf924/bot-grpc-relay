@@ -104,7 +104,7 @@ func (c *grpcBotRelay) Start(botUser *messages.User, users []*messages.User) err
 	c.botUser = botUser
 	c.users = users
 	log.Println("Listening on ", c.config.Port)
-	l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", c.config.Port))
+	l, err := net.Listen("tcp", fmt.Sprintf(":%d", c.config.Port))
 	if err != nil {
 		return err
 	}
