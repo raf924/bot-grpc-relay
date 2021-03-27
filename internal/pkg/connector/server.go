@@ -110,6 +110,7 @@ func (c *grpcBotRelay) Start(botUser *messages.User, users []*messages.User) err
 	}
 	var serverOption grpc.ServerOption = grpc.EmptyServerOption{}
 	if c.config.TLS.Enabled {
+		log.Println("Using TLS Server Configuration")
 		serverOption, err = utils.LoadTLSServerConfig(c.config.TLS.Ca, c.config.TLS.Cert, c.config.TLS.Key)
 		if err != nil {
 			return err

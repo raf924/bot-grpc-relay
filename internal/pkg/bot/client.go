@@ -119,6 +119,7 @@ func (g *grpcConnectorRelay) Connect(registration *messages.RegistrationPacket) 
 	var clientOption = grpc.WithInsecure()
 	var err error
 	if g.config.Tls.Enabled {
+		log.Println("Using TLS Client Configuration")
 		clientOption, err = utils.LoadTLSClientConfig(g.config.Tls.Name, g.config.Tls.Ca, g.config.Tls.Cert, g.config.Tls.Key)
 		if err != nil {
 			return nil, err
