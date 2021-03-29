@@ -115,8 +115,14 @@ func (c *grpcBotRelay) Start(botUser *messages.User, users []*messages.User) err
 		if err != nil {
 			return err
 		}
+
 	}
-	grpcServer := grpc.NewServer(serverOption)
+
+	var authorizedUsers []string
+	if c.config.TLS.Enabled {
+		authorizedUsers = c.config.TLS.Users
+	}
+	grpcServer := grpc.NewServer(append(BasicAuth(authorizedUsers), serverOption)...)
 	api.RegisterConnectorServer(grpcServer, c)
 	go func() {
 		if err := grpcServer.Serve(l); err != nil {

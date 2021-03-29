@@ -1,8 +1,10 @@
 package utils
 
 import (
+	"crypto/sha512"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -44,7 +46,14 @@ func LoadTLSServerConfig(caFile string, certFile string, keyFile string) (grpc.S
 		return nil, err
 	}
 	tlsConfig.ClientCAs = caPool
-	tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+	tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
 	serverCreds := credentials.NewTLS(tlsConfig)
 	return grpc.Creds(serverCreds), nil
+}
+
+func CheckHash(s string, hash string) bool {
+	shaHash := sha512.New()
+	shaHash.Write([]byte(s))
+	b := shaHash.Sum(nil)
+	return hash == hex.EncodeToString(b)
 }
