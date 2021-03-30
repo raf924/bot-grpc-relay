@@ -22,7 +22,7 @@ func (a *basicAuth) Authorize(ctx context.Context) error {
 	if client.AuthInfo.AuthType() != "tls" {
 		return errors.New("connection is not secure")
 	}
-	tlsInfo := client.AuthInfo.(*credentials.TLSInfo)
+	tlsInfo := client.AuthInfo.(credentials.TLSInfo)
 	if len(tlsInfo.State.VerifiedChains) > 0 {
 		return nil
 	}
