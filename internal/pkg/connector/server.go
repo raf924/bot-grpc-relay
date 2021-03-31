@@ -45,6 +45,10 @@ type grpcBotRelay struct {
 }
 
 func (c *grpcBotRelay) send(ctx context.Context, channel chan protoreflect.ProtoMessage, stream grpc.ServerStream) error {
+	defer func() {
+		log.Println("Cancelling contexts")
+		c.streamsCancel()
+	}()
 	var errCh = make(chan error, 1)
 	go func() {
 		var f = func() error {
@@ -59,6 +63,8 @@ func (c *grpcBotRelay) send(ctx context.Context, channel chan protoreflect.Proto
 						return err
 					}
 					log.Println("packet sent")
+				case <-stream.Context().Done():
+					return stream.Context().Err()
 				case <-ctx.Done():
 					return ctx.Err()
 				}
