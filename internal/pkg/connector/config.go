@@ -1,6 +1,6 @@
 package connector
 
-type grpcRelayConfig struct {
+type GrpcRelayConfig struct {
 	Port int32 `yaml:"port"`
 	//Duration string: 22s, 44m, 3h2m
 	Timeout string `yaml:"timeout"`

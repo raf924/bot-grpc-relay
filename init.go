@@ -7,5 +7,9 @@ import (
 )
 
 func init() {
-	relay.RegisterBotRelay("grpc", connector.NewGrpcBotRelay)
+	relay.RegisterBotRelay("grpc", NewGrpcBotRelay)
 }
+
+var NewGrpcBotRelay = connector.NewGrpcBotRelay
+
+type GrpcRelayConfig = connector.GrpcRelayConfig

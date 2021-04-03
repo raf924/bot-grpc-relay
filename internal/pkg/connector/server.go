@@ -21,7 +21,7 @@ func NewGrpcBotRelay(config interface{}) relay.BotRelay {
 	if err != nil {
 		panic(err)
 	}
-	var conf grpcRelayConfig
+	var conf GrpcRelayConfig
 	if err := yaml.Unmarshal(data, &conf); err != nil {
 		panic(err)
 	}
@@ -30,7 +30,7 @@ func NewGrpcBotRelay(config interface{}) relay.BotRelay {
 
 type grpcBotRelay struct {
 	api.UnimplementedConnectorServer
-	config         grpcRelayConfig
+	config         GrpcRelayConfig
 	messageQueue   chan protoreflect.ProtoMessage
 	commandQueue   chan protoreflect.ProtoMessage
 	eventsQueue    chan protoreflect.ProtoMessage
