@@ -6,10 +6,12 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"sync"
 )
 
 type session struct {
 	sessions map[string]struct{}
+	mutex    *sync.Mutex
 }
 
 func (i *session) Intercept(ctx context.Context) error {
@@ -22,8 +24,10 @@ func (i *session) identify(ctx context.Context) error {
 		return nil
 	}
 	if method == "/connector.Connector/Register" {
+		i.mutex.Lock()
 		sessionId := uuid.New().String()
 		i.sessions[sessionId] = struct{}{}
+		i.mutex.Unlock()
 		return grpc.SetHeader(ctx, metadata.Pairs("sessionid", sessionId))
 	}
 	md, ok := metadata.FromIncomingContext(ctx)
@@ -43,5 +47,5 @@ func (i *session) identify(ctx context.Context) error {
 }
 
 func Session() *session {
-	return &session{map[string]struct{}{}}
+	return &session{map[string]struct{}{}, &sync.Mutex{}}
 }
