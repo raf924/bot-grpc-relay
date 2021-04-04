@@ -138,6 +138,10 @@ func (c *grpcBotRelay) Register(ctx context.Context, registration *messages.Regi
 	}, nil
 }
 
+func (c *grpcBotRelay) Ping(context.Context, *empty.Empty) (*empty.Empty, error) {
+	return &empty.Empty{}, nil
+}
+
 func (c *grpcBotRelay) ReadMessages(empty *empty.Empty, server api.Connector_ReadMessagesServer) error {
 	ctx, _ := context.WithCancel(c.streamsContext)
 	return c.send(ctx, c.messageQueue, server)
