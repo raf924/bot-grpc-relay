@@ -1,6 +1,6 @@
-package bot
+package config
 
-type grpcClientConfig struct {
+type GrpcClientConfig struct {
 	Host string `yaml:"host"`
 	Port int32  `yaml:"port"`
 	Tls  struct {

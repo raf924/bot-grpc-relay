@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	cnf "github.com/raf924/bot-grpc-relay/internal/pkg/config"
 	"github.com/raf924/bot-grpc-relay/internal/pkg/utils"
 	"github.com/raf924/bot/pkg/relay"
 	api "github.com/raf924/connector-api/pkg/gen"
 	messages "github.com/raf924/connector-api/pkg/gen"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"gopkg.in/yaml.v2"
@@ -26,7 +28,7 @@ func newConnectorRelay(config interface{}) relay.ConnectorRelay {
 	if err != nil {
 		panic(err)
 	}
-	var conf grpcClientConfig
+	var conf cnf.GrpcClientConfig
 	if err := yaml.Unmarshal(data, &conf); err != nil {
 		panic(err)
 	}
@@ -70,7 +72,7 @@ func readCommandStream(stream grpc.ClientStream, f func(message *messages.Comman
 }
 
 type grpcConnectorRelay struct {
-	config          grpcClientConfig
+	config          cnf.GrpcClientConfig
 	connector       api.ConnectorClient
 	users           []*messages.User
 	onUserJoin      func(user *messages.User, timestamp int64)
@@ -80,6 +82,7 @@ type grpcConnectorRelay struct {
 	incomingChannel chan protoreflect.ProtoMessage
 	ctx             context.Context
 	cancel          context.CancelFunc
+	session         string
 }
 
 func (g *grpcConnectorRelay) Done() <-chan struct{} {
@@ -137,15 +140,17 @@ func (g *grpcConnectorRelay) Connect(registration *messages.RegistrationPacket) 
 		return nil, errors.New("couldn't create client")
 	}
 	g.incomingChannel = make(chan protoreflect.ProtoMessage)
-	confirmation, err := g.connector.Register(context.Background(), registration)
+	md := metadata.New(map[string]string{})
+	confirmation, err := g.connector.Register(context.Background(), registration, grpc.Header(&md))
 	if err != nil {
 		return nil, err
 	}
 	if confirmation == nil {
 		return nil, errors.New("no confirmation from connector")
 	}
+	g.session = md.Get("sessionid")[0]
 	g.users = confirmation.Users
-	eventStream, err := g.connector.ReadUserEvents(context.Background(), &emptypb.Empty{})
+	eventStream, err := g.connector.ReadUserEvents(metadata.AppendToOutgoingContext(context.Background(), "sessionid", g.session), &emptypb.Empty{})
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +175,7 @@ func (g *grpcConnectorRelay) Connect(registration *messages.RegistrationPacket) 
 			return
 		}
 	}()
-	g.messageStream, err = g.connector.ReadMessages(context.Background(), &emptypb.Empty{})
+	g.messageStream, err = g.connector.ReadMessages(metadata.AppendToOutgoingContext(context.Background(), "sessionid", g.session), &emptypb.Empty{})
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +193,7 @@ func (g *grpcConnectorRelay) Connect(registration *messages.RegistrationPacket) 
 			return
 		}
 	}()
-	g.commandStream, err = g.connector.ReadCommands(context.Background(), &emptypb.Empty{})
+	g.commandStream, err = g.connector.ReadCommands(metadata.AppendToOutgoingContext(context.Background(), "sessionid", g.session), &emptypb.Empty{})
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +216,7 @@ func (g *grpcConnectorRelay) Connect(registration *messages.RegistrationPacket) 
 
 func (g *grpcConnectorRelay) Send(message *messages.BotPacket) error {
 	ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
-	_, err := g.connector.SendMessage(ctx, message)
+	_, err := g.connector.SendMessage(metadata.AppendToOutgoingContext(ctx, "sessionid", g.session), message)
 	return err
 }
 

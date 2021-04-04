@@ -2,10 +2,9 @@ package connector
 
 import (
 	"context"
-	"fmt"
 	"github.com/golang/protobuf/ptypes/empty"
-	"github.com/raf924/bot-grpc-relay/internal/pkg/utils"
-	"github.com/raf924/bot/pkg/relay"
+	config2 "github.com/raf924/bot-grpc-relay/internal/pkg/config"
+	"github.com/raf924/bot-grpc-relay/pkg/server"
 	api "github.com/raf924/connector-api/pkg/gen"
 	messages "github.com/raf924/connector-api/pkg/gen"
 	"google.golang.org/grpc"
@@ -13,15 +12,14 @@ import (
 	"gopkg.in/yaml.v2"
 	"io"
 	"log"
-	"net"
 )
 
-func NewGrpcBotRelay(config interface{}) relay.BotRelay {
+func NewGrpcBotRelay(config interface{}) *grpcBotRelay {
 	data, err := yaml.Marshal(config)
 	if err != nil {
 		panic(err)
 	}
-	var conf GrpcRelayConfig
+	var conf config2.GrpcRelayConfig
 	if err := yaml.Unmarshal(data, &conf); err != nil {
 		panic(err)
 	}
@@ -30,7 +28,7 @@ func NewGrpcBotRelay(config interface{}) relay.BotRelay {
 
 type grpcBotRelay struct {
 	api.UnimplementedConnectorServer
-	config         GrpcRelayConfig
+	config         config2.GrpcRelayConfig
 	messageQueue   chan protoreflect.ProtoMessage
 	commandQueue   chan protoreflect.ProtoMessage
 	eventsQueue    chan protoreflect.ProtoMessage
@@ -102,41 +100,14 @@ func (c *grpcBotRelay) Commands() []*messages.Command {
 }
 
 func (c *grpcBotRelay) Start(botUser *messages.User, users []*messages.User) error {
+	c.botUser = botUser
+	c.users = users
 	c.readyChannel = make(chan struct{})
 	c.botChannel = make(chan *messages.BotPacket)
 	c.messageQueue = make(chan protoreflect.ProtoMessage)
 	c.commandQueue = make(chan protoreflect.ProtoMessage)
 	c.eventsQueue = make(chan protoreflect.ProtoMessage)
-	c.botUser = botUser
-	c.users = users
-	log.Println("Listening on ", c.config.Port)
-	l, err := net.Listen("tcp", fmt.Sprintf(":%d", c.config.Port))
-	if err != nil {
-		return err
-	}
-	var serverOption grpc.ServerOption = grpc.EmptyServerOption{}
-	if c.config.TLS.Enabled {
-		log.Println("Using TLS Server Configuration")
-		serverOption, err = utils.LoadTLSServerConfig(c.config.TLS.Ca, c.config.TLS.Cert, c.config.TLS.Key)
-		if err != nil {
-			return err
-		}
-
-	}
-
-	var authorizedUsers []string
-	if c.config.TLS.Enabled {
-		authorizedUsers = c.config.TLS.Users
-	}
-	grpcServer := grpc.NewServer(append(BasicAuth(authorizedUsers), serverOption)...)
-	api.RegisterConnectorServer(grpcServer, c)
-	go func() {
-		if err := grpcServer.Serve(l); err != nil {
-			panic(err)
-		}
-		return
-	}()
-	return nil
+	return server.StartServer(c, c.config)
 }
 
 func (c *grpcBotRelay) Trigger() string {

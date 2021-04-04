@@ -4,6 +4,7 @@ go 1.14
 
 require (
 	github.com/golang/protobuf v1.5.0
+	github.com/google/uuid v1.1.2
 	github.com/raf924/bot v1.0.0-alpha.13
 	github.com/raf924/connector-api v1.0.0-alpha.2
 	google.golang.org/grpc v1.36.1

@@ -1,4 +1,4 @@
-package connector
+package config
 
 type GrpcRelayConfig struct {
 	Port int32 `yaml:"port"`
