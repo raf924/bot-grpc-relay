@@ -5,7 +5,9 @@ import (
 	"errors"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"sync"
 )
 
@@ -15,7 +17,11 @@ type session struct {
 }
 
 func (i *session) Intercept(ctx context.Context) error {
-	return i.identify(ctx)
+	err := i.identify(ctx)
+	if err != nil {
+		err = status.Error(codes.PermissionDenied, err.Error())
+	}
+	return err
 }
 
 func (i *session) identify(ctx context.Context) error {

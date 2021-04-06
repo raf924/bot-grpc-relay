@@ -3,10 +3,12 @@ package auth
 import (
 	"context"
 	"errors"
-	"github.com/raf924/bot-grpc-relay/internal/pkg/utils"
+	"github.com/raf924/bot-grpc-relay/pkg/utils"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
 type basicAuth struct {
@@ -14,7 +16,11 @@ type basicAuth struct {
 }
 
 func (a *basicAuth) Intercept(ctx context.Context) error {
-	return a.authorize(ctx)
+	err := a.authorize(ctx)
+	if err != nil {
+		err = status.Error(codes.PermissionDenied, err.Error())
+	}
+	return err
 }
 
 func (a *basicAuth) authorize(ctx context.Context) error {

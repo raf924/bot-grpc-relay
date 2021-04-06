@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	cnf "github.com/raf924/bot-grpc-relay/internal/pkg/config"
-	"github.com/raf924/bot-grpc-relay/internal/pkg/utils"
+	"github.com/raf924/bot-grpc-relay/pkg/utils"
 	"github.com/raf924/bot/pkg/relay"
 	api "github.com/raf924/connector-api/pkg/gen"
 	messages "github.com/raf924/connector-api/pkg/gen"
@@ -123,7 +123,7 @@ func (g *grpcConnectorRelay) Connect(registration *messages.RegistrationPacket) 
 	var err error
 	if g.config.Tls.Enabled {
 		log.Println("Using TLS Client Configuration")
-		clientOption, err = utils.LoadTLSClientConfig(g.config.Tls.Name, g.config.Tls.Ca, g.config.Tls.Cert, g.config.Tls.Key)
+		clientOption, err = utils.LoadMutualTLSClientConfig(g.config.Tls.Name, g.config.Tls.Ca, g.config.Tls.Cert, g.config.Tls.Key)
 		if err != nil {
 			return nil, err
 		}

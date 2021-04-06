@@ -5,7 +5,7 @@ import (
 	"github.com/raf924/bot-grpc-relay/internal/pkg/auth"
 	"github.com/raf924/bot-grpc-relay/internal/pkg/config"
 	"github.com/raf924/bot-grpc-relay/internal/pkg/interceptors"
-	"github.com/raf924/bot-grpc-relay/internal/pkg/utils"
+	"github.com/raf924/bot-grpc-relay/pkg/utils"
 	api "github.com/raf924/connector-api/pkg/gen"
 	messages "github.com/raf924/connector-api/pkg/gen"
 	"google.golang.org/grpc"

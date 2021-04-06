@@ -11,26 +11,33 @@ import (
 	"io/ioutil"
 )
 
+func loadCaPool(caFile string) (*x509.CertPool, error) {
+	caPool := x509.NewCertPool()
+	pem, err := ioutil.ReadFile(caFile)
+	if err != nil {
+		return nil, err
+	}
+	if !caPool.AppendCertsFromPEM(pem) {
+		return nil, errors.New("couldn't use CA certificate")
+	}
+	return caPool, nil
+}
+
 func loadTlsConfig(caFile string, certFile string, keyFile string) (*tls.Config, *x509.CertPool, error) {
 	certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
 		return nil, nil, err
 	}
-	caPool := x509.NewCertPool()
-	pem, err := ioutil.ReadFile(caFile)
+	caPool, err := loadCaPool(caFile)
 	if err != nil {
 		return nil, nil, err
-	}
-	if !caPool.AppendCertsFromPEM(pem) {
-		return nil, nil, errors.New("couldn't use CA certificate")
-
 	}
 	return &tls.Config{
 		Certificates: []tls.Certificate{certificate},
 	}, caPool, nil
 }
 
-func LoadTLSClientConfig(serverName string, caFile string, certFile string, keyFile string) (grpc.DialOption, error) {
+func LoadMutualTLSClientConfig(serverName string, caFile string, certFile string, keyFile string) (grpc.DialOption, error) {
 	tlsConfig, caPool, err := loadTlsConfig(caFile, certFile, keyFile)
 	if err != nil {
 		return nil, err
@@ -38,6 +45,14 @@ func LoadTLSClientConfig(serverName string, caFile string, certFile string, keyF
 	tlsConfig.RootCAs = caPool
 	tlsConfig.ServerName = serverName
 	return grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)), nil
+}
+
+func LoadTLSClientConfig(serverName string, caFile string) (grpc.DialOption, error) {
+	caPool, err := loadCaPool(caFile)
+	if err != nil {
+		return nil, err
+	}
+	return grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(caPool, serverName)), nil
 }
 
 func LoadTLSServerConfig(caFile string, certFile string, keyFile string) (grpc.ServerOption, error) {
