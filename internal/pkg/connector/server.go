@@ -107,7 +107,7 @@ func (c *grpcBotRelay) Start(botUser *messages.User, users []*messages.User) err
 	c.messageQueue = make(chan protoreflect.ProtoMessage)
 	c.commandQueue = make(chan protoreflect.ProtoMessage)
 	c.eventsQueue = make(chan protoreflect.ProtoMessage)
-	return server.StartServer(c, c.config)
+	return server.StartConnectorServer(c, c.config)
 }
 
 func (c *grpcBotRelay) Trigger() string {

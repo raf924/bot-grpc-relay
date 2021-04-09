@@ -13,12 +13,17 @@ import (
 	"net"
 )
 
-func StartServer(c messages.ConnectorServer, config config.GrpcRelayConfig) error {
+func StartConnectorServer(c messages.ConnectorServer, config config.GrpcRelayConfig) error {
 	log.Println("Listening on ", config.Port)
 	l, err := net.Listen("tcp", fmt.Sprintf(":%d", config.Port))
 	if err != nil {
 		return err
 	}
+	return StartServer(l, c, config)
+}
+
+func StartServer(l net.Listener, c messages.ConnectorServer, config config.GrpcRelayConfig) error {
+	var err error
 	var tlsOption grpc.ServerOption = grpc.EmptyServerOption{}
 	if config.TLS.Enabled {
 		log.Println("Using TLS Server Configuration")
