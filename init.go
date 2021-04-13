@@ -1,18 +1,25 @@
 package pkg
 
 import (
+	"github.com/raf924/bot-grpc-relay/internal/pkg/bot"
 	_ "github.com/raf924/bot-grpc-relay/internal/pkg/bot"
 	"github.com/raf924/bot-grpc-relay/internal/pkg/config"
 	"github.com/raf924/bot-grpc-relay/internal/pkg/connector"
-	"github.com/raf924/bot/pkg/relay"
+	"github.com/raf924/bot/pkg/queue"
+	"github.com/raf924/bot/pkg/relay/client"
+	"github.com/raf924/bot/pkg/relay/server"
 )
 
 func init() {
-	relay.RegisterBotRelay("grpc", func(config interface{}) relay.BotRelay {
-		return NewGrpcBotRelay(config)
+	server.RegisterRelayServer("grpc", func(config interface{}, connectorExchange *queue.Exchange) server.RelayServer {
+		return connector.NewGrpcRelayServer(config, connectorExchange)
+	})
+	client.RegisterRelayClient("grpc", func(config interface{}, withBotExchange *queue.Exchange) client.RelayClient {
+		return bot.NewGrpcRelayClient(config, withBotExchange)
 	})
 }
 
-var NewGrpcBotRelay = connector.NewGrpcBotRelay
+var NewGrpcRelayServer = connector.NewGrpcRelayServer
 
-type GrpcRelayConfig = config.GrpcRelayConfig
+type GrpcServerConfig = config.GrpcServerConfig
+type GrpcClientConfig = config.GrpcClientConfig

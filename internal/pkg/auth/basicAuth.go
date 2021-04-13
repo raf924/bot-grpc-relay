@@ -24,6 +24,9 @@ func (a *basicAuth) Intercept(ctx context.Context) error {
 }
 
 func (a *basicAuth) authorize(ctx context.Context) error {
+	if len(a.users) == 0 {
+		return nil
+	}
 	client, ok := peer.FromContext(ctx)
 	if !ok {
 		return errors.New("couldn't access client information")
@@ -52,9 +55,6 @@ func (a *basicAuth) authorize(ctx context.Context) error {
 }
 
 func BasicAuth(users []string) *basicAuth {
-	if len(users) == 0 {
-		return nil
-	}
 	return &basicAuth{users: users}
 }
 

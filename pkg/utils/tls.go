@@ -6,14 +6,16 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"io/ioutil"
+	"path"
 )
 
 func loadCaPool(caFile string) (*x509.CertPool, error) {
 	caPool := x509.NewCertPool()
-	pem, err := ioutil.ReadFile(caFile)
+	pem, err := ioutil.ReadFile(path.Clean(caFile))
 	if err != nil {
 		return nil, err
 	}
@@ -24,7 +26,7 @@ func loadCaPool(caFile string) (*x509.CertPool, error) {
 }
 
 func loadTlsConfig(caFile string, certFile string, keyFile string) (*tls.Config, *x509.CertPool, error) {
-	certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
+	certificate, err := tls.LoadX509KeyPair(path.Clean(certFile), path.Clean(keyFile))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -34,6 +36,7 @@ func loadTlsConfig(caFile string, certFile string, keyFile string) (*tls.Config,
 	}
 	return &tls.Config{
 		Certificates: []tls.Certificate{certificate},
+		MinVersion:   tls.VersionTLS12,
 	}, caPool, nil
 }
 
@@ -71,4 +74,11 @@ func CheckHash(s string, hash string) bool {
 	shaHash.Write([]byte(s))
 	b := shaHash.Sum(nil)
 	return hash == hex.EncodeToString(b)
+}
+
+func Hash(username string, password string) string {
+	shaHash := sha512.New()
+	shaHash.Write([]byte(fmt.Sprintf("%s:%s", username, password)))
+	b := shaHash.Sum(nil)
+	return hex.EncodeToString(b)
 }

@@ -3,189 +3,208 @@ package connector
 import (
 	"context"
 	"github.com/golang/protobuf/ptypes/empty"
-	config2 "github.com/raf924/bot-grpc-relay/internal/pkg/config"
+	cnf "github.com/raf924/bot-grpc-relay/internal/pkg/config"
 	"github.com/raf924/bot-grpc-relay/pkg/server"
+	"github.com/raf924/bot/pkg/queue"
+	"github.com/raf924/bot/pkg/users"
 	api "github.com/raf924/connector-api/pkg/gen"
 	messages "github.com/raf924/connector-api/pkg/gen"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v2"
-	"io"
 	"log"
+	"net"
 )
 
-func NewGrpcBotRelay(config interface{}) *grpcBotRelay {
+func NewGrpcRelayServer(config interface{}, connectorExchange *queue.Exchange) *grpcRelayServer {
 	data, err := yaml.Marshal(config)
 	if err != nil {
 		panic(err)
 	}
-	var conf config2.GrpcRelayConfig
+	var conf cnf.GrpcServerConfig
 	if err := yaml.Unmarshal(data, &conf); err != nil {
 		panic(err)
 	}
-	return &grpcBotRelay{config: conf}
+	return newGrpcRelayServer(conf, connectorExchange)
 }
 
-type grpcBotRelay struct {
+func newGrpcRelayServer(config cnf.GrpcServerConfig, connectorExchange *queue.Exchange) *grpcRelayServer {
+	return &grpcRelayServer{config: config, consumerSessions: map[string]*queue.Consumer{}, connectorExchange: connectorExchange}
+}
+
+type grpcRelayServer struct {
 	api.UnimplementedConnectorServer
-	config         config2.GrpcRelayConfig
-	messageQueue   chan protoreflect.ProtoMessage
-	commandQueue   chan protoreflect.ProtoMessage
-	eventsQueue    chan protoreflect.ProtoMessage
-	registration   *messages.RegistrationPacket
-	users          []*messages.User
-	botUser        *messages.User
-	botChannel     chan *messages.BotPacket
-	readyChannel   chan struct{}
-	streamsContext context.Context
-	streamsCancel  context.CancelFunc
-	streams        []grpc.ServerStream
+	config            cnf.GrpcServerConfig
+	commands          []*messages.Command
+	consumerSessions  map[string]*queue.Consumer
+	connectorExchange *queue.Exchange
+	messageQueue      queue.Queue
+	commandQueue      queue.Queue
+	eventsQueue       queue.Queue
+	messageProducer   *queue.Producer
+	commandProducer   *queue.Producer
+	eventsProducer    *queue.Producer
+	registration      *messages.RegistrationPacket
+	users             *users.UserList
+	botUser           *messages.User
+	streamsContext    context.Context
+	streamsCancel     context.CancelFunc
+	trigger           string
 }
 
-func (c *grpcBotRelay) send(ctx context.Context, channel chan protoreflect.ProtoMessage, stream grpc.ServerStream) error {
+func (c *grpcRelayServer) relay(consumer *queue.Consumer, stream grpc.ServerStream) error {
 	defer func() {
-		log.Println("Cancelling contexts")
-		c.streamsCancel()
+		consumer.Cancel()
 	}()
 	var errCh = make(chan error, 1)
 	go func() {
 		var f = func() error {
 			for {
 				select {
-				case packet, ok := <-channel:
-					if !ok {
-						return io.EOF
-					}
-					log.Println("sending packet")
-					if err := stream.SendMsg(packet); err != nil {
-						return err
-					}
-					log.Println("packet sent")
 				case <-stream.Context().Done():
 					return stream.Context().Err()
-				case <-ctx.Done():
-					return ctx.Err()
+				default:
+					packet, err := consumer.Consume()
+					if err != nil {
+						return err
+					}
+					if err = stream.SendMsg(packet); err != nil {
+						return err
+					}
 				}
 			}
 		}
 		errCh <- f()
 	}()
+	err := <-errCh
+	return err
+}
+
+func (c *grpcRelayServer) Commands() []*messages.Command {
+	return c.commands
+}
+
+func (c *grpcRelayServer) Start(botUser *messages.User, onlineUsers []*messages.User, trigger string) error {
+	return c.start(botUser, onlineUsers, trigger, nil)
+}
+
+func (c *grpcRelayServer) start(botUser *messages.User, onlineUsers []*messages.User, trigger string, l net.Listener) error {
+	c.trigger = trigger
+	c.botUser = botUser
+	c.users = users.NewUserList(onlineUsers...)
+	c.messageQueue = queue.NewQueue()
+	c.commandQueue = queue.NewQueue()
+	c.eventsQueue = queue.NewQueue()
+	var err error
+	c.messageProducer, err = c.messageQueue.NewProducer()
+	if err != nil {
+		return err
+	}
+	c.commandProducer, err = c.commandQueue.NewProducer()
+	if err != nil {
+		return err
+	}
+	c.eventsProducer, err = c.eventsQueue.NewProducer()
+	if err != nil {
+		return err
+	}
+	go func() {
+		err := c.dispatchConnectorPackets()
+		panic(err)
+	}()
+	if l == nil {
+		return server.StartConnectorServer(c, c.config)
+	}
+	return server.StartServer(l, c, c.config)
+}
+
+func (c *grpcRelayServer) dispatchConnectorPackets() error {
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case err := <-errCh:
+		m, err := c.connectorExchange.Consume()
+		if err != nil {
+			return err
+		}
+		switch m.(type) {
+		case *messages.MessagePacket:
+			err = c.dispatchMessage(m.(*messages.MessagePacket))
+		case *messages.UserPacket:
+			err = c.dispatchEvent(m.(*messages.UserPacket))
+		case *messages.CommandPacket:
+			err = c.dispatchCommand(m.(*messages.CommandPacket))
+		default:
+			log.Println("unknown packet type from connector")
+		}
+		if err != nil {
 			return err
 		}
 	}
 }
 
-func (c *grpcBotRelay) RecvMsg(packet *messages.BotPacket) error {
-	if c.botChannel == nil {
-		return io.ErrClosedPipe
-	}
-	p, ok := <-c.botChannel
-	if !ok {
-		return io.EOF
-	}
-	*packet = *p
-	return nil
+func (c *grpcRelayServer) Trigger() string {
+	return c.trigger
 }
 
-func (c *grpcBotRelay) Commands() []*messages.Command {
-	if c.registration == nil {
-		return nil
-	}
-	return c.registration.Commands
-}
-
-func (c *grpcBotRelay) Start(botUser *messages.User, users []*messages.User) error {
-	c.botUser = botUser
-	c.users = users
-	c.readyChannel = make(chan struct{})
-	c.botChannel = make(chan *messages.BotPacket)
-	c.messageQueue = make(chan protoreflect.ProtoMessage)
-	c.commandQueue = make(chan protoreflect.ProtoMessage)
-	c.eventsQueue = make(chan protoreflect.ProtoMessage)
-	return server.StartConnectorServer(c, c.config)
-}
-
-func (c *grpcBotRelay) Trigger() string {
-	if c.registration == nil {
-		return ""
-	}
-	return c.registration.Trigger
-}
-
-func (c *grpcBotRelay) Ready() <-chan struct{} {
-	return c.readyChannel
-}
-
-func (c *grpcBotRelay) Register(ctx context.Context, registration *messages.RegistrationPacket) (*messages.ConfirmationPacket, error) {
+func (c *grpcRelayServer) Register(ctx context.Context, registration *messages.RegistrationPacket) (*messages.ConfirmationPacket, error) {
 	log.Println("Registering new client")
-	c.registration = registration
-	go func() {
-		c.readyChannel <- struct{}{}
-	}()
-	if c.streamsCancel != nil {
-		log.Println("Cancelling contexts")
-		c.streamsCancel()
-	}
-	c.streamsContext, c.streamsCancel = context.WithCancel(context.Background())
+	c.commands = append(c.commands, registration.GetCommands()...)
 	return &messages.ConfirmationPacket{
 		BotUser: c.botUser,
-		Users:   c.users,
+		Users:   c.users.All(),
 	}, nil
 }
 
-func (c *grpcBotRelay) Ping(context.Context, *empty.Empty) (*empty.Empty, error) {
+func (c *grpcRelayServer) Ping(context.Context, *empty.Empty) (*empty.Empty, error) {
 	return &empty.Empty{}, nil
 }
 
-func (c *grpcBotRelay) ReadMessages(empty *empty.Empty, server api.Connector_ReadMessagesServer) error {
-	ctx, _ := context.WithCancel(c.streamsContext)
-	return c.send(ctx, c.messageQueue, server)
+func (c *grpcRelayServer) ReadMessages(empty *empty.Empty, server api.Connector_ReadMessagesServer) error {
+	consumer, err := c.messageQueue.NewConsumer()
+	if err != nil {
+		return status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return c.relay(consumer, server)
 }
 
-func (c *grpcBotRelay) ReadCommands(empty *empty.Empty, server api.Connector_ReadCommandsServer) error {
-	ctx, _ := context.WithCancel(c.streamsContext)
-	return c.send(ctx, c.commandQueue, server)
+func (c *grpcRelayServer) ReadCommands(empty *empty.Empty, server api.Connector_ReadCommandsServer) error {
+	consumer, err := c.commandQueue.NewConsumer()
+	if err != nil {
+		return status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return c.relay(consumer, server)
 }
 
-func (c *grpcBotRelay) ReadUserEvents(empty *empty.Empty, server api.Connector_ReadUserEventsServer) error {
-	ctx, _ := context.WithCancel(c.streamsContext)
-	return c.send(ctx, c.eventsQueue, server)
+func (c *grpcRelayServer) ReadUserEvents(empty *empty.Empty, server api.Connector_ReadUserEventsServer) error {
+	consumer, err := c.eventsQueue.NewConsumer()
+	if err != nil {
+		return status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return c.relay(consumer, server)
 }
 
-func (c *grpcBotRelay) SendMessage(ctx context.Context, packet *messages.BotPacket) (*empty.Empty, error) {
-	log.Println("Message received")
-	c.botChannel <- packet
-	return &empty.Empty{}, nil
+func (c *grpcRelayServer) SendMessage(ctx context.Context, packet *messages.BotPacket) (*empty.Empty, error) {
+	err := c.connectorExchange.Produce(packet)
+	return &empty.Empty{}, err
 }
 
-func (c *grpcBotRelay) PassMessage(message *messages.MessagePacket) error {
-	c.messageQueue <- message
-	return nil
+func (c *grpcRelayServer) dispatchMessage(message *messages.MessagePacket) error {
+	return c.messageProducer.Produce(message)
 }
 
-func (c *grpcBotRelay) PassEvent(event *messages.UserPacket) error {
-	c.eventsQueue <- event
+func (c *grpcRelayServer) dispatchEvent(event *messages.UserPacket) error {
+	err := c.eventsProducer.Produce(event)
+	if err != nil {
+		return err
+	}
 	switch event.Event {
 	case messages.UserEvent_JOINED:
-		c.users = append(c.users, event.GetUser())
+		c.users.Add(event.GetUser())
 	case messages.UserEvent_LEFT:
-		for i, user := range c.users {
-			if user.GetNick() == event.GetUser().GetNick() {
-				c.users = append(c.users[:i], c.users[i+1:]...)
-				break
-			}
-		}
+		c.users.Remove(event.GetUser())
 	}
 	return nil
 }
 
-func (c *grpcBotRelay) PassCommand(command *messages.CommandPacket) error {
-	log.Println("passing command")
-	c.commandQueue <- command
-	return nil
+func (c *grpcRelayServer) dispatchCommand(command *messages.CommandPacket) error {
+	return c.commandProducer.Produce(command)
 }

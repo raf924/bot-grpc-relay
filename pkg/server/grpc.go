@@ -1,7 +1,6 @@
 package server
 
 import (
-	"fmt"
 	"github.com/raf924/bot-grpc-relay/internal/pkg/auth"
 	"github.com/raf924/bot-grpc-relay/internal/pkg/config"
 	"github.com/raf924/bot-grpc-relay/internal/pkg/interceptors"
@@ -11,18 +10,19 @@ import (
 	"google.golang.org/grpc"
 	"log"
 	"net"
+	"strconv"
 )
 
-func StartConnectorServer(c messages.ConnectorServer, config config.GrpcRelayConfig) error {
+func StartConnectorServer(c messages.ConnectorServer, config config.GrpcServerConfig) error {
 	log.Println("Listening on ", config.Port)
-	l, err := net.Listen("tcp", fmt.Sprintf(":%d", config.Port))
+	l, err := net.Listen("tcp", net.JoinHostPort("", strconv.FormatInt(int64(config.Port), 10)))
 	if err != nil {
 		return err
 	}
 	return StartServer(l, c, config)
 }
 
-func StartServer(l net.Listener, c messages.ConnectorServer, config config.GrpcRelayConfig) error {
+func StartServer(l net.Listener, c messages.ConnectorServer, config config.GrpcServerConfig) error {
 	var err error
 	var tlsOption grpc.ServerOption = grpc.EmptyServerOption{}
 	if config.TLS.Enabled {

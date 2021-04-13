@@ -6,12 +6,13 @@ import (
 	"fmt"
 	cnf "github.com/raf924/bot-grpc-relay/internal/pkg/config"
 	"github.com/raf924/bot-grpc-relay/pkg/utils"
-	"github.com/raf924/bot/pkg/relay"
+	"github.com/raf924/bot/pkg/queue"
+	"github.com/raf924/bot/pkg/users"
 	api "github.com/raf924/connector-api/pkg/gen"
 	messages "github.com/raf924/connector-api/pkg/gen"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"gopkg.in/yaml.v2"
 	"io"
@@ -19,11 +20,7 @@ import (
 	"time"
 )
 
-func init() {
-	relay.RegisterConnectorRelay("grpc", newConnectorRelay)
-}
-
-func newConnectorRelay(config interface{}) relay.ConnectorRelay {
+func NewGrpcRelayClient(config interface{}, botExchange *queue.Exchange) *grpcRelayClient {
 	data, err := yaml.Marshal(config)
 	if err != nil {
 		panic(err)
@@ -32,93 +29,181 @@ func newConnectorRelay(config interface{}) relay.ConnectorRelay {
 	if err := yaml.Unmarshal(data, &conf); err != nil {
 		panic(err)
 	}
-	return &grpcConnectorRelay{config: conf}
+	return newGrpcRelayClient(conf, botExchange)
 }
 
-func readEventStream(stream grpc.ClientStream, f func(event *messages.UserPacket) error) error {
-	var err error
-	var packet messages.UserPacket
-	for ; err == nil; err = stream.RecvMsg(&packet) {
-		err := f(&packet)
-		if err != nil {
-			log.Println(err)
-		}
-	}
-	return err
+func newGrpcRelayClient(config cnf.GrpcClientConfig, botExchange *queue.Exchange) *grpcRelayClient {
+	return &grpcRelayClient{config: config, botExchange: botExchange}
 }
 
-func readMessageStream(stream grpc.ClientStream, f func(message *messages.MessagePacket) error) error {
-	var err error
-	var packet messages.MessagePacket
-	for ; err == nil; err = stream.RecvMsg(&packet) {
-		err := f(&packet)
-		if err != nil {
-			log.Println(err)
-		}
-	}
-	return err
-}
+type streamReader func(stream grpc.ClientStream) (proto.Message, error)
 
-func readCommandStream(stream grpc.ClientStream, f func(message *messages.CommandPacket) error) error {
-	var err error
-	var packet messages.CommandPacket
-	for ; err == nil; err = stream.RecvMsg(&packet) {
-		err := f(&packet)
-		if err != nil {
-			log.Println(err)
-		}
-	}
-	return err
-}
-
-type grpcConnectorRelay struct {
+type grpcRelayClient struct {
 	config          cnf.GrpcClientConfig
-	connector       api.ConnectorClient
-	users           []*messages.User
+	connectorClient api.ConnectorClient
+	users           *users.UserList
 	onUserJoin      func(user *messages.User, timestamp int64)
 	onUserLeft      func(user *messages.User, timestamp int64)
-	messageStream   grpc.ClientStream
-	commandStream   grpc.ClientStream
-	incomingChannel chan protoreflect.ProtoMessage
 	ctx             context.Context
 	cancel          context.CancelFunc
 	session         string
+	botExchange     *queue.Exchange
 }
 
-func (g *grpcConnectorRelay) Done() <-chan struct{} {
+func (g *grpcRelayClient) Done() <-chan struct{} {
 	return g.ctx.Done()
 }
 
-func (g *grpcConnectorRelay) GetUsers() []*messages.User {
-	return g.users
+func (g *grpcRelayClient) GetUsers() []*messages.User {
+	return g.users.All()
 }
 
-func (g *grpcConnectorRelay) OnUserJoin(f func(user *messages.User, timestamp int64)) {
+func (g *grpcRelayClient) OnUserJoin(f func(user *messages.User, timestamp int64)) {
 	g.onUserJoin = func(user *messages.User, timestamp int64) {
 		if user == nil {
 			return
 		}
-		g.users = append(g.users, user)
+		g.users.Add(user)
 		f(user, timestamp)
 	}
 }
 
-func (g *grpcConnectorRelay) OnUserLeft(f func(user *messages.User, timestamp int64)) {
+func (g *grpcRelayClient) OnUserLeft(f func(user *messages.User, timestamp int64)) {
 	g.onUserLeft = func(user *messages.User, timestamp int64) {
-		for i, u := range g.users {
-			if u.GetNick() == user.GetNick() {
-				g.users = append(g.users[:i], g.users[i+1:]...)
-				break
-			}
-		}
+		g.users.Remove(user)
 		f(user, timestamp)
 	}
 }
 
-func (g *grpcConnectorRelay) Connect(registration *messages.RegistrationPacket) (*messages.User, error) {
+func (g *grpcRelayClient) readUserEvent(stream grpc.ClientStream) (proto.Message, error) {
+	packet, err := stream.(messages.Connector_ReadUserEventsClient).Recv()
+	if err != nil {
+		return nil, err
+	}
+	switch packet.Event {
+	case messages.UserEvent_JOINED:
+		if g.onUserJoin == nil {
+			break
+		}
+		g.onUserJoin(packet.User, packet.Timestamp.GetSeconds())
+	case messages.UserEvent_LEFT:
+		if g.onUserLeft == nil {
+			break
+		}
+		g.onUserLeft(packet.User, packet.Timestamp.GetSeconds())
+	}
+	return packet, nil
+}
+
+func (g *grpcRelayClient) readMessage(stream grpc.ClientStream) (proto.Message, error) {
+	message, err := stream.(messages.Connector_ReadMessagesClient).Recv()
+	if err != nil {
+		return nil, err
+	}
+	log.Println("[", message.GetTimestamp().AsTime().String(), "]", "-", message.GetUser().GetNick(), ":", message.GetMessage())
+	return message, nil
+}
+
+func (g *grpcRelayClient) readCommand(stream grpc.ClientStream) (proto.Message, error) {
+	packet, err := stream.(messages.Connector_ReadCommandsClient).Recv()
+	if err != nil {
+		return nil, err
+	}
+	log.Println("[", packet.GetTimestamp().AsTime().String(), "]", "-", packet.GetCommand(), "(", packet.GetArgString(), ")")
+	return packet, nil
+}
+
+func (g *grpcRelayClient) relayStream(stream grpc.ClientStream, reader streamReader) error {
+	for {
+		packet, err := reader(stream)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return err
+			}
+			log.Println("client stream error =", err)
+			continue
+		}
+		err = g.relayToBot(packet)
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func (g *grpcRelayClient) getSessionContext(ctx ...context.Context) context.Context {
+	if len(ctx) == 0 {
+		ctx = append(ctx, context.Background())
+	}
+	return metadata.AppendToOutgoingContext(ctx[0], "sessionid", g.session)
+}
+
+func (g *grpcRelayClient) connect(registration *messages.RegistrationPacket, conn *grpc.ClientConn) (*messages.User, error) {
 	g.OnUserJoin(func(user *messages.User, timestamp int64) {})
 	g.OnUserLeft(func(user *messages.User, timestamp int64) {})
 	g.ctx, g.cancel = context.WithCancel(context.Background())
+	g.connectorClient = api.NewConnectorClient(conn)
+	if g.connectorClient == nil {
+		return nil, errors.New("couldn't create client")
+	}
+	md := metadata.New(map[string]string{})
+	confirmation, err := g.connectorClient.Register(context.Background(), registration, grpc.Header(&md))
+	if err != nil {
+		return nil, err
+	}
+	if confirmation == nil {
+		return nil, errors.New("no confirmation from connectorClient")
+	}
+	g.session = md.Get("sessionid")[0]
+	g.users = users.NewUserList(confirmation.Users...)
+	eventStream, err := g.connectorClient.ReadUserEvents(g.getSessionContext(), &emptypb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		err := g.relayStream(eventStream, g.readUserEvent)
+		if !errors.Is(err, io.EOF) {
+			g.cancel()
+			return
+		}
+	}()
+	messageStream, err := g.connectorClient.ReadMessages(g.getSessionContext(), &emptypb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		err := g.relayStream(messageStream, g.readMessage)
+		if !errors.Is(err, io.EOF) {
+			g.cancel()
+			return
+		}
+	}()
+	commandStream, err := g.connectorClient.ReadCommands(g.getSessionContext(), &emptypb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		err := g.relayStream(commandStream, g.readCommand)
+		if !errors.Is(err, io.EOF) {
+			g.cancel()
+			return
+		}
+	}()
+	go func() {
+		for {
+			p, err := g.botExchange.Consume()
+			if err != nil {
+				panic(err)
+			}
+			err = g.send(p.(*messages.BotPacket))
+			if err != nil {
+				log.Println("Couldn't send packet to relay server:", p, "=>", err)
+			}
+		}
+	}()
+	return confirmation.BotUser, nil
+}
+
+func (g *grpcRelayClient) Connect(registration *messages.RegistrationPacket) (*messages.User, error) {
 	var clientOption = grpc.WithInsecure()
 	var err error
 	if g.config.Tls.Enabled {
@@ -135,102 +220,16 @@ func (g *grpcConnectorRelay) Connect(registration *messages.RegistrationPacket) 
 		return nil, err
 	}
 	log.Println("Connected")
-	g.connector = api.NewConnectorClient(conn)
-	if g.connector == nil {
-		return nil, errors.New("couldn't create client")
-	}
-	g.incomingChannel = make(chan protoreflect.ProtoMessage)
-	md := metadata.New(map[string]string{})
-	confirmation, err := g.connector.Register(context.Background(), registration, grpc.Header(&md))
-	if err != nil {
-		return nil, err
-	}
-	if confirmation == nil {
-		return nil, errors.New("no confirmation from connector")
-	}
-	g.session = md.Get("sessionid")[0]
-	g.users = confirmation.Users
-	eventStream, err := g.connector.ReadUserEvents(metadata.AppendToOutgoingContext(context.Background(), "sessionid", g.session), &emptypb.Empty{})
-	if err != nil {
-		return nil, err
-	}
-	go func() {
-		err := readEventStream(eventStream, func(event *messages.UserPacket) error {
-			switch event.Event {
-			case messages.UserEvent_JOINED:
-				if g.onUserJoin == nil {
-					return nil
-				}
-				g.onUserJoin(event.User, event.Timestamp.GetSeconds())
-			case messages.UserEvent_LEFT:
-				if g.onUserLeft == nil {
-					return nil
-				}
-				g.onUserLeft(event.User, event.Timestamp.GetSeconds())
-			}
-			return nil
-		})
-		if !errors.Is(err, io.EOF) {
-			g.cancel()
-			return
-		}
-	}()
-	g.messageStream, err = g.connector.ReadMessages(metadata.AppendToOutgoingContext(context.Background(), "sessionid", g.session), &emptypb.Empty{})
-	if err != nil {
-		return nil, err
-	}
-	go func() {
-		err := readMessageStream(g.messageStream, func(message *messages.MessagePacket) error {
-			if message.Timestamp == nil {
-				return nil
-			}
-			log.Println(message.Timestamp.AsTime().String(), "-", message.User.Nick, ":", message.Message)
-			g.incomingChannel <- message
-			return nil
-		})
-		if !errors.Is(err, io.EOF) {
-			g.cancel()
-			return
-		}
-	}()
-	g.commandStream, err = g.connector.ReadCommands(metadata.AppendToOutgoingContext(context.Background(), "sessionid", g.session), &emptypb.Empty{})
-	if err != nil {
-		return nil, err
-	}
-	go func() {
-		err := readCommandStream(g.commandStream, func(message *messages.CommandPacket) error {
-			if message.Timestamp == nil {
-				return nil
-			}
-			log.Println("Getting command")
-			g.incomingChannel <- message
-			return nil
-		})
-		if !errors.Is(err, io.EOF) {
-			g.cancel()
-			return
-		}
-	}()
-	return confirmation.BotUser, nil
+	return g.connect(registration, conn)
 }
 
-func (g *grpcConnectorRelay) Send(message *messages.BotPacket) error {
+func (g *grpcRelayClient) relayToBot(message proto.Message) error {
+	log.Println("relaying to bot", message)
+	return g.botExchange.Produce(message)
+}
+
+func (g *grpcRelayClient) send(message *messages.BotPacket) error {
 	ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
-	_, err := g.connector.SendMessage(metadata.AppendToOutgoingContext(ctx, "sessionid", g.session), message)
+	_, err := g.connectorClient.SendMessage(g.getSessionContext(ctx), message)
 	return err
-}
-
-func (g *grpcConnectorRelay) Recv() (*relay.ConnectorMessage, error) {
-	var p relay.ConnectorMessage
-	err := g.RecvMsg(&p)
-	return &p, err
-}
-
-func (g *grpcConnectorRelay) RecvMsg(packet *relay.ConnectorMessage) error {
-	var ok bool
-	packet.Message, ok = <-g.incomingChannel
-	if !ok {
-		return io.EOF
-	}
-	return nil
 }
