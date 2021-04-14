@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"gopkg.in/yaml.v2"
 	"log"
 	"net"
@@ -30,27 +31,47 @@ func NewGrpcRelayServer(config interface{}, connectorExchange *queue.Exchange) *
 }
 
 func newGrpcRelayServer(config cnf.GrpcServerConfig, connectorExchange *queue.Exchange) *grpcRelayServer {
-	return &grpcRelayServer{config: config, consumerSessions: map[string]*queue.Consumer{}, connectorExchange: connectorExchange}
+	return &grpcRelayServer{config: config, consumerSessions: map[string]*queue.Consumer{}}
 }
 
 type grpcRelayServer struct {
 	api.UnimplementedConnectorServer
-	config            cnf.GrpcServerConfig
-	commands          []*messages.Command
-	consumerSessions  map[string]*queue.Consumer
-	connectorExchange *queue.Exchange
-	messageQueue      queue.Queue
-	commandQueue      queue.Queue
-	eventsQueue       queue.Queue
-	messageProducer   *queue.Producer
-	commandProducer   *queue.Producer
-	eventsProducer    *queue.Producer
-	registration      *messages.RegistrationPacket
-	users             *users.UserList
-	botUser           *messages.User
-	streamsContext    context.Context
-	streamsCancel     context.CancelFunc
-	trigger           string
+	config           cnf.GrpcServerConfig
+	commands         []*messages.Command
+	consumerSessions map[string]*queue.Consumer
+	clientConsumer   *queue.Consumer
+	clientProducer   *queue.Producer
+	messageQueue     queue.Queue
+	commandQueue     queue.Queue
+	eventsQueue      queue.Queue
+	messageProducer  *queue.Producer
+	commandProducer  *queue.Producer
+	eventsProducer   *queue.Producer
+	registration     *messages.RegistrationPacket
+	users            *users.UserList
+	botUser          *messages.User
+	streamsContext   context.Context
+	streamsCancel    context.CancelFunc
+	trigger          string
+}
+
+func (c *grpcRelayServer) Send(message proto.Message) error {
+	switch message.(type) {
+	case *messages.MessagePacket:
+		return c.dispatchMessage(message.(*messages.MessagePacket))
+	case *messages.CommandPacket:
+		return c.dispatchCommand(message.(*messages.CommandPacket))
+	case *messages.UserPacket:
+		return c.dispatchEvent(message.(*messages.UserPacket))
+	default:
+		log.Println("Unknown type")
+	}
+	return nil
+}
+
+func (c *grpcRelayServer) Recv() (*messages.BotPacket, error) {
+	p, err := c.clientConsumer.Consume()
+	return p.(*messages.BotPacket), err
 }
 
 func (c *grpcRelayServer) relay(consumer *queue.Consumer, stream grpc.ServerStream) error {
@@ -93,6 +114,7 @@ func (c *grpcRelayServer) start(botUser *messages.User, onlineUsers []*messages.
 	c.trigger = trigger
 	c.botUser = botUser
 	c.users = users.NewUserList(onlineUsers...)
+
 	c.messageQueue = queue.NewQueue()
 	c.commandQueue = queue.NewQueue()
 	c.eventsQueue = queue.NewQueue()
@@ -109,36 +131,15 @@ func (c *grpcRelayServer) start(botUser *messages.User, onlineUsers []*messages.
 	if err != nil {
 		return err
 	}
-	go func() {
-		err := c.dispatchConnectorPackets()
-		panic(err)
-	}()
+
+	clientQueue := queue.NewQueue()
+	c.clientProducer, err = clientQueue.NewProducer()
+	c.clientConsumer, err = clientQueue.NewConsumer()
+
 	if l == nil {
 		return server.StartConnectorServer(c, c.config)
 	}
 	return server.StartServer(l, c, c.config)
-}
-
-func (c *grpcRelayServer) dispatchConnectorPackets() error {
-	for {
-		m, err := c.connectorExchange.Consume()
-		if err != nil {
-			return err
-		}
-		switch m.(type) {
-		case *messages.MessagePacket:
-			err = c.dispatchMessage(m.(*messages.MessagePacket))
-		case *messages.UserPacket:
-			err = c.dispatchEvent(m.(*messages.UserPacket))
-		case *messages.CommandPacket:
-			err = c.dispatchCommand(m.(*messages.CommandPacket))
-		default:
-			log.Println("unknown packet type from connector")
-		}
-		if err != nil {
-			return err
-		}
-	}
 }
 
 func (c *grpcRelayServer) Trigger() string {
@@ -183,7 +184,7 @@ func (c *grpcRelayServer) ReadUserEvents(empty *empty.Empty, server api.Connecto
 }
 
 func (c *grpcRelayServer) SendMessage(ctx context.Context, packet *messages.BotPacket) (*empty.Empty, error) {
-	err := c.connectorExchange.Produce(packet)
+	err := c.clientProducer.Produce(packet)
 	return &empty.Empty{}, err
 }
 
