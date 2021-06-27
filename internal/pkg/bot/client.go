@@ -118,10 +118,9 @@ func (g *grpcRelayClient) relayStream(stream grpc.ClientStream, reader streamRea
 		packet, err := reader(stream)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return err
+				return nil
 			}
-			log.Println("client stream error =", err)
-			continue
+			return err
 		}
 		err = g.relayToBot(packet)
 		if err != nil {
@@ -146,14 +145,18 @@ func (g *grpcRelayClient) connect(registration *messages.RegistrationPacket, con
 		return nil, errors.New("couldn't create client")
 	}
 	md := metadata.New(map[string]string{})
-	confirmation, err := g.connectorClient.Register(context.Background(), registration, grpc.Header(&md))
+	_, err := g.connectorClient.Connect(context.Background(), &emptypb.Empty{}, grpc.Header(&md))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("couldn't connect: %v", err)
+	}
+	g.session = md.Get("sessionid")[0]
+	confirmation, err := g.connectorClient.Register(g.getSessionContext(), registration)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't register: %v", err)
 	}
 	if confirmation == nil {
 		return nil, errors.New("no confirmation from connectorClient")
 	}
-	g.session = md.Get("sessionid")[0]
 	g.users = users.NewUserList(confirmation.Users...)
 	eventStream, err := g.connectorClient.ReadUserEvents(g.getSessionContext(), &emptypb.Empty{})
 	if err != nil {
@@ -177,7 +180,7 @@ func (g *grpcRelayClient) connect(registration *messages.RegistrationPacket, con
 			return
 		}
 	}()
-	commandStream, err := g.connectorClient.ReadCommands(g.getSessionContext(), &emptypb.Empty{})
+	commandStream, err := g.connectorClient.ReadCommands(g.getSessionContext(g.ctx), &emptypb.Empty{})
 	if err != nil {
 		return nil, err
 	}

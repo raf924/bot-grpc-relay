@@ -11,6 +11,7 @@ import (
 	messages "github.com/raf924/connector-api/pkg/gen"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"gopkg.in/yaml.v2"
@@ -31,28 +32,31 @@ func NewGrpcRelayServer(config interface{}, connectorExchange *queue.Exchange) *
 }
 
 func newGrpcRelayServer(config cnf.GrpcServerConfig, connectorExchange *queue.Exchange) *grpcRelayServer {
-	return &grpcRelayServer{config: config, consumerSessions: map[string]*queue.Consumer{}}
+	return &grpcRelayServer{config: config}
 }
 
 type grpcRelayServer struct {
 	api.UnimplementedConnectorServer
-	config           cnf.GrpcServerConfig
-	commands         []*messages.Command
-	consumerSessions map[string]*queue.Consumer
-	clientConsumer   *queue.Consumer
-	clientProducer   *queue.Producer
-	messageQueue     queue.Queue
-	commandQueue     queue.Queue
-	eventsQueue      queue.Queue
-	messageProducer  *queue.Producer
-	commandProducer  *queue.Producer
-	eventsProducer   *queue.Producer
-	registration     *messages.RegistrationPacket
-	users            *users.UserList
-	botUser          *messages.User
-	streamsContext   context.Context
-	streamsCancel    context.CancelFunc
-	trigger          string
+	config          cnf.GrpcServerConfig
+	sessionCommands map[string][]*messages.Command
+	clientConsumer  *queue.Consumer
+	clientProducer  *queue.Producer
+	messageQueue    queue.Queue
+	commandQueue    queue.Queue
+	eventsQueue     queue.Queue
+	messageProducer *queue.Producer
+	commandProducer *queue.Producer
+	eventsProducer  *queue.Producer
+	registration    *messages.RegistrationPacket
+	users           *users.UserList
+	botUser         *messages.User
+	streamsContext  context.Context
+	streamsCancel   context.CancelFunc
+	trigger         string
+}
+
+func (c *grpcRelayServer) Connect(ctx context.Context, e *empty.Empty) (*empty.Empty, error) {
+	return &empty.Empty{}, nil
 }
 
 func (c *grpcRelayServer) Send(message proto.Message) error {
@@ -74,8 +78,10 @@ func (c *grpcRelayServer) Recv() (*messages.BotPacket, error) {
 	return p.(*messages.BotPacket), err
 }
 
-func (c *grpcRelayServer) relay(consumer *queue.Consumer, stream grpc.ServerStream) error {
+func (c *grpcRelayServer) relay(consumer *queue.Consumer, stream grpc.ServerStream, sessionId string) error {
 	defer func() {
+		log.Println("Terminate session", sessionId)
+		delete(c.sessionCommands, sessionId)
 		consumer.Cancel()
 	}()
 	var errCh = make(chan error, 1)
@@ -103,7 +109,11 @@ func (c *grpcRelayServer) relay(consumer *queue.Consumer, stream grpc.ServerStre
 }
 
 func (c *grpcRelayServer) Commands() []*messages.Command {
-	return c.commands
+	var commands []*messages.Command
+	for _, sessionCommands := range c.sessionCommands {
+		commands = append(commands, sessionCommands...)
+	}
+	return commands
 }
 
 func (c *grpcRelayServer) Start(botUser *messages.User, onlineUsers []*messages.User, trigger string) error {
@@ -113,6 +123,7 @@ func (c *grpcRelayServer) Start(botUser *messages.User, onlineUsers []*messages.
 func (c *grpcRelayServer) start(botUser *messages.User, onlineUsers []*messages.User, trigger string, l net.Listener) error {
 	c.trigger = trigger
 	c.botUser = botUser
+	c.sessionCommands = map[string][]*messages.Command{}
 	c.users = users.NewUserList(onlineUsers...)
 
 	c.messageQueue = queue.NewQueue()
@@ -148,7 +159,9 @@ func (c *grpcRelayServer) Trigger() string {
 
 func (c *grpcRelayServer) Register(ctx context.Context, registration *messages.RegistrationPacket) (*messages.ConfirmationPacket, error) {
 	log.Println("Registering new client")
-	c.commands = append(c.commands, registration.GetCommands()...)
+	md, _ := metadata.FromIncomingContext(ctx)
+	sessionId := md.Get("sessionId")[0]
+	c.sessionCommands[sessionId] = registration.GetCommands()
 	return &messages.ConfirmationPacket{
 		BotUser: c.botUser,
 		Users:   c.users.All(),
@@ -160,27 +173,33 @@ func (c *grpcRelayServer) Ping(context.Context, *empty.Empty) (*empty.Empty, err
 }
 
 func (c *grpcRelayServer) ReadMessages(empty *empty.Empty, server api.Connector_ReadMessagesServer) error {
+	md, _ := metadata.FromIncomingContext(server.Context())
+	sessionId := md.Get("sessionId")[0]
 	consumer, err := c.messageQueue.NewConsumer()
 	if err != nil {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	}
-	return c.relay(consumer, server)
+	return c.relay(consumer, server, sessionId)
 }
 
 func (c *grpcRelayServer) ReadCommands(empty *empty.Empty, server api.Connector_ReadCommandsServer) error {
+	md, _ := metadata.FromIncomingContext(server.Context())
+	sessionId := md.Get("sessionId")[0]
 	consumer, err := c.commandQueue.NewConsumer()
 	if err != nil {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	}
-	return c.relay(consumer, server)
+	return c.relay(consumer, server, sessionId)
 }
 
 func (c *grpcRelayServer) ReadUserEvents(empty *empty.Empty, server api.Connector_ReadUserEventsServer) error {
+	md, _ := metadata.FromIncomingContext(server.Context())
+	sessionId := md.Get("sessionId")[0]
 	consumer, err := c.eventsQueue.NewConsumer()
 	if err != nil {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	}
-	return c.relay(consumer, server)
+	return c.relay(consumer, server, sessionId)
 }
 
 func (c *grpcRelayServer) SendMessage(ctx context.Context, packet *messages.BotPacket) (*empty.Empty, error) {

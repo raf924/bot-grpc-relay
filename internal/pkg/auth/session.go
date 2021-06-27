@@ -29,7 +29,7 @@ func (i *session) identify(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
-	if method == "/connector.Connector/Register" {
+	if method == "/connector.Connector/Connect" {
 		i.mutex.Lock()
 		sessionId := uuid.New().String()
 		i.sessions[sessionId] = struct{}{}
