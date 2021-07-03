@@ -19,7 +19,7 @@ import (
 	"net"
 )
 
-func NewGrpcRelayServer(config interface{}, connectorExchange *queue.Exchange) *grpcRelayServer {
+func NewGrpcRelayServer(config interface{}) *grpcRelayServer {
 	data, err := yaml.Marshal(config)
 	if err != nil {
 		panic(err)
@@ -28,10 +28,10 @@ func NewGrpcRelayServer(config interface{}, connectorExchange *queue.Exchange) *
 	if err := yaml.Unmarshal(data, &conf); err != nil {
 		panic(err)
 	}
-	return newGrpcRelayServer(conf, connectorExchange)
+	return newGrpcRelayServer(conf)
 }
 
-func newGrpcRelayServer(config cnf.GrpcServerConfig, connectorExchange *queue.Exchange) *grpcRelayServer {
+func newGrpcRelayServer(config cnf.GrpcServerConfig) *grpcRelayServer {
 	return &grpcRelayServer{config: config}
 }
 

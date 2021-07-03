@@ -91,8 +91,8 @@ func (d *dummyServer) Ping(ctx context.Context, empty *empty.Empty) (*empty.Empt
 	return empty, nil
 }
 
-func setupGrpcClient(t testing.TB, botExchange *queue.Exchange) *grpcRelayClient {
-	grpcRelay := newGrpcRelayClient(config.GrpcClientConfig{}, botExchange)
+func setupGrpcClient(t testing.TB) *grpcRelayClient {
+	grpcRelay := newGrpcRelayClient(config.GrpcClientConfig{})
 	l := bufconn.Listen(1024 * 1024)
 	err := server.StartServer(l, &dummyServer{}, config.GrpcServerConfig{})
 	if err != nil {
@@ -119,8 +119,7 @@ func TestGrpcRelayClient(t *testing.T) {
 	var b2c = queue.NewQueue()
 	var c2b = queue.NewQueue()
 	clientExchange, _ := queue.NewExchange(b2c, c2b)
-	botExchange, _ := queue.NewExchange(c2b, b2c)
-	_ = setupGrpcClient(t, botExchange)
+	_ = setupGrpcClient(t)
 	packet1, err := clientExchange.Consume()
 	if err != nil {
 		t.Fatalf("Unexpected error = %v", err)

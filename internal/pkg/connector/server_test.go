@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-func setupGrpcRelayServer(t testing.TB, connectorExchange *queue.Exchange) gen.ConnectorClient {
+func setupGrpcRelayServer(t testing.TB) gen.ConnectorClient {
 	grpcRelay := newGrpcRelayServer(config.GrpcServerConfig{
 		Port:    0,
 		Timeout: "30s",
@@ -30,7 +30,7 @@ func setupGrpcRelayServer(t testing.TB, connectorExchange *queue.Exchange) gen.C
 		}{
 			Enabled: false,
 		},
-	}, connectorExchange)
+	})
 	l := bufconn.Listen(1024 * 1024)
 	err := grpcRelay.start(&gen.User{
 		Nick:  "bot",
@@ -54,9 +54,8 @@ func setupGrpcRelayServer(t testing.TB, connectorExchange *queue.Exchange) gen.C
 func TestGrpcRelayServer_SendMessage(t *testing.T) {
 	var b2c = queue.NewQueue()
 	var c2b = queue.NewQueue()
-	connectorExchange, _ := queue.NewExchange(b2c, c2b)
 	botExchange, _ := queue.NewExchange(c2b, b2c)
-	client := setupGrpcRelayServer(t, connectorExchange)
+	client := setupGrpcRelayServer(t)
 	var header metadata.MD
 	_, err := client.Register(context.Background(), &gen.RegistrationPacket{
 		Trigger:  "",
@@ -108,9 +107,8 @@ var botUser = &gen.User{
 func testReadPackets(t *testing.T, test test) {
 	var b2c = queue.NewQueue()
 	var c2b = queue.NewQueue()
-	connectorExchange, _ := queue.NewExchange(b2c, c2b)
 	botExchange, _ := queue.NewExchange(c2b, b2c)
-	client := setupGrpcRelayServer(t, connectorExchange)
+	client := setupGrpcRelayServer(t)
 	var header metadata.MD
 	_, err := client.Register(context.Background(), &gen.RegistrationPacket{
 		Trigger:  "",

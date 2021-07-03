@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-func NewGrpcRelayClient(config interface{}, botExchange *queue.Exchange) *grpcRelayClient {
+func NewGrpcRelayClient(config interface{}) *grpcRelayClient {
 	data, err := yaml.Marshal(config)
 	if err != nil {
 		panic(err)
@@ -29,11 +29,14 @@ func NewGrpcRelayClient(config interface{}, botExchange *queue.Exchange) *grpcRe
 	if err := yaml.Unmarshal(data, &conf); err != nil {
 		panic(err)
 	}
-	return newGrpcRelayClient(conf, botExchange)
+	return newGrpcRelayClient(conf)
 }
 
-func newGrpcRelayClient(config cnf.GrpcClientConfig, botExchange *queue.Exchange) *grpcRelayClient {
-	return &grpcRelayClient{config: config, botExchange: botExchange}
+func newGrpcRelayClient(config cnf.GrpcClientConfig) *grpcRelayClient {
+	packetQueue := queue.NewQueue()
+	packetProducer, _ := packetQueue.NewProducer()
+	packetConsumer, _ := packetQueue.NewConsumer()
+	return &grpcRelayClient{config: config, packetProducer: packetProducer, packetConsumer: packetConsumer}
 }
 
 type streamReader func(stream grpc.ClientStream) (proto.Message, error)
@@ -47,7 +50,21 @@ type grpcRelayClient struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	session         string
-	botExchange     *queue.Exchange
+	packetConsumer  *queue.Consumer
+	packetProducer  *queue.Producer
+}
+
+func (g *grpcRelayClient) Send(packet *messages.BotPacket) error {
+	err := g.send(packet)
+	if err != nil {
+		return fmt.Errorf("couldn't send packet to relay server: %v => %v", packet, err)
+	}
+	return nil
+}
+
+func (g *grpcRelayClient) Recv() (proto.Message, error) {
+	m, err := g.packetConsumer.Consume()
+	return m.(proto.Message), err
 }
 
 func (g *grpcRelayClient) Done() <-chan struct{} {
@@ -191,18 +208,6 @@ func (g *grpcRelayClient) connect(registration *messages.RegistrationPacket, con
 			return
 		}
 	}()
-	go func() {
-		for {
-			p, err := g.botExchange.Consume()
-			if err != nil {
-				panic(err)
-			}
-			err = g.send(p.(*messages.BotPacket))
-			if err != nil {
-				log.Println("Couldn't send packet to relay server:", p, "=>", err)
-			}
-		}
-	}()
 	return confirmation.BotUser, nil
 }
 
@@ -227,8 +232,7 @@ func (g *grpcRelayClient) Connect(registration *messages.RegistrationPacket) (*m
 }
 
 func (g *grpcRelayClient) relayToBot(message proto.Message) error {
-	log.Println("relaying to bot", message)
-	return g.botExchange.Produce(message)
+	return g.packetProducer.Produce(message)
 }
 
 func (g *grpcRelayClient) send(message *messages.BotPacket) error {
