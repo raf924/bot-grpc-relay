@@ -8,6 +8,6 @@ require (
 	github.com/raf924/bot v1.0.0-alpha.25
 	github.com/raf924/connector-api v1.0.0-alpha.9
 	google.golang.org/grpc v1.39.0
-	google.golang.org/protobuf v1.27.0
+	google.golang.org/protobuf v1.28.1
 	gopkg.in/yaml.v2 v2.4.0
 )
